@@ -7,8 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_API: ghcr.io/${{ github.repository_owner }}/back:latest
-  IMAGE_API_SHA: ghcr.io/${{ github.repository_owner }}/back:${{ github.sha }}
+  IMAGE_API: ghcr.io/kb-hackathon-ssh/back:latest
   REMOTE_DIR: /srv/ssh
 
 jobs:
@@ -24,7 +23,7 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build & Push (latest + sha)
+      - name: Build & Push
         uses: docker/build-push-action@v6
         with:
           context: ./ssh
@@ -32,9 +31,6 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_API }}
-            ${{ env.IMAGE_API_SHA }}
-          cache-from: type=registry,ref=${{ env.IMAGE_API }}
-          cache-to: type=inline
 
   deploy:
     runs-on: ubuntu-latest
