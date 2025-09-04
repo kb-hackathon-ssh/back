@@ -1,6 +1,10 @@
 package kb.hackathon.ssh.domain.chatbot.service;
 
+import kb.hackathon.ssh.domain.chatbot.dto.ChatbotStartResponseDto;
+import kb.hackathon.ssh.domain.chatbot.dto.OptionDto;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 public class ChatbotService {
@@ -17,7 +21,19 @@ public class ChatbotService {
             %s
             """;
 
-    public String getAnswerFromLLM(String userMessage, String knowledge) {
+    public ChatbotStartResponseDto getStartResponse() {
+        String greeting = "안녕하세요, 어르신. 디지털 금융 동반자 '마음 잇는 목소리'입니다. 아래에서 원하시는 서비스를 선택하시거나, 편하게 말씀해주세요.";
+
+        List<OptionDto> options = List.of(
+                new OptionDto("주변 ATM 찾기 안내", "ATM은 어떻게 찾아요?"),
+                new OptionDto("보이스피싱 진단 안내", "보이스피싱은 어떻게 확인해요?"),
+                new OptionDto("유산 기부 방법 안내", "유산 기부는 어떻게 해요?")
+        );
+
+        return new ChatbotStartResponseDto(greeting, options);
+    }
+
+    private String getAnswerFromLLM(String userMessage, String knowledge) {
         String finalPrompt = String.format(PROMPT_TEMPLATE, knowledge, userMessage);
 
         // ... finalPrompt를 LLM API로 보내는 로직 ...
