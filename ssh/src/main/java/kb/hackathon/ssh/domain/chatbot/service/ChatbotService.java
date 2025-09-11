@@ -1,9 +1,7 @@
 package kb.hackathon.ssh.domain.chatbot.service;
 
-import kb.hackathon.ssh.domain.chatbot.dto.ChatMessageRequestDto;
-import kb.hackathon.ssh.domain.chatbot.dto.ChatMessageResponseDto;
-import kb.hackathon.ssh.domain.chatbot.dto.ChatbotStartResponseDto;
-import kb.hackathon.ssh.domain.chatbot.dto.OptionDto;
+import kb.hackathon.ssh.domain.chatbot.dto.*;
+import kb.hackathon.ssh.domain.chatbot.speech.SpeechService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
@@ -24,9 +22,11 @@ import java.util.Map;
 public class ChatbotService {
 
     private final ChatClient chatClient;
+    private final SpeechService speechService;
 
-    public ChatbotService(ChatClient.Builder chatClientBuilder) {
+    public ChatbotService(ChatClient.Builder chatClientBuilder, SpeechService speechService) {
         this.chatClient = chatClientBuilder.build();
+        this.speechService = speechService;
     }
 
     @Value("classpath:knowledge.txt")
@@ -87,6 +87,24 @@ public class ChatbotService {
         }
 
         return createGeneralResponse(userMessage);
+    }
+
+    public SpeechResponseDto processSpeechMessage(SpeechRequestDto requestDto) throws IOException {
+        String userMessageText = speechService.convertSpeechToText(requestDto.audioFile());
+
+        ChatMessageRequestDto chatMessageRequestDto = new ChatMessageRequestDto(userMessageText, requestDto.conversationContext());
+        ChatMessageResponseDto chatTextResponse = processMessage(chatMessageRequestDto);
+
+        byte[] chatbotAudio = speechService.convertTextToSpeech(chatTextResponse.responseText());
+
+        return SpeechResponseDto.builder()
+                .userMessageText(userMessageText)
+                .chatbotMessageText(chatTextResponse.responseText())
+                .chatbotAudio(chatbotAudio)
+                .actionType(chatTextResponse.actionType())
+                .actionData(chatTextResponse.actionData())
+                .conversationContext(chatTextResponse.conversationContext())
+                .build();
     }
 
     private boolean isPositiveResponse(String message) {

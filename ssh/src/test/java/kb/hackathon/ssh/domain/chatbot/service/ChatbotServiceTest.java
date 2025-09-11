@@ -1,8 +1,7 @@
 package kb.hackathon.ssh.domain.chatbot.service;
 
-import kb.hackathon.ssh.domain.chatbot.dto.ChatMessageRequestDto;
-import kb.hackathon.ssh.domain.chatbot.dto.ChatMessageResponseDto;
-import kb.hackathon.ssh.domain.chatbot.dto.ChatbotStartResponseDto;
+import kb.hackathon.ssh.domain.chatbot.dto.*;
+import kb.hackathon.ssh.domain.chatbot.speech.SpeechService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -13,33 +12,41 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class ChatbotServiceTest {
 
     private ChatbotService chatbotService;
-
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     private ChatClient chatClient;
-
     @Mock
     private ChatClient.Builder chatClientBuilder;
+    @Mock
+    private SpeechService speechService;
+    @Mock
+    private Resource knowledgeResource;
+
+
+    private final String phishingGuideVideoUrl = "https://www.youtube.com/watch?v=jFdg0_b-BHc";
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         when(chatClientBuilder.build()).thenReturn(chatClient);
-        chatbotService = new ChatbotService(chatClientBuilder);
-        ReflectionTestUtils.setField(chatbotService, "knowledgeResource", new ByteArrayResource("테스트용 지식창고 내용".getBytes()));
-        ReflectionTestUtils.setField(chatbotService, "phishingGuideVideoUrl", "https://www.youtube.com/watch?v=jFdg0_b-BHc");
+        chatbotService = new ChatbotService(chatClientBuilder, speechService);
+        ReflectionTestUtils.setField(chatbotService, "knowledgeResource", knowledgeResource);
+        lenient().when(knowledgeResource.getContentAsString(StandardCharsets.UTF_8)).thenReturn("테스트용 지식창고 내용");
+        ReflectionTestUtils.setField(chatbotService, "phishingGuideVideoUrl", phishingGuideVideoUrl);
     }
 
     @Test
@@ -73,6 +80,7 @@ class ChatbotServiceTest {
             assertEquals("SPEAK", response.actionType());
             assertEquals("AWAITING_ATM_HIGHLIGHT", response.conversationContext());
             assertTrue(response.responseText().contains("제가 버튼 위치를 알려드릴까요?"));
+            verifyNoInteractions(chatClient);
         }
 
         @Test
@@ -93,6 +101,7 @@ class ChatbotServiceTest {
             } else {
                 fail("actionData should be an instance of Map.");
             }
+            verifyNoInteractions(chatClient);
         }
 
         @Test
@@ -108,6 +117,7 @@ class ChatbotServiceTest {
             assertEquals("SPEAK", response.actionType());
             assertEquals("AWAITING_PHISHING_CHOICE", response.conversationContext());
             assertTrue(response.responseText().contains("버튼 위치를 알려드릴까요, 아니면 영상으로"));
+            verifyNoInteractions(chatClient);
         }
 
         @Test
@@ -123,10 +133,11 @@ class ChatbotServiceTest {
             assertEquals("SHOW_VIDEO", response.actionType());
             assertNull(response.conversationContext());
             if (response.actionData() instanceof Map<?, ?> dataMap) {
-                assertEquals("https://www.youtube.com/watch?v=jFdg0_b-BHc", dataMap.get("videoUrl"));
+                assertEquals(phishingGuideVideoUrl, dataMap.get("videoUrl"));
             } else {
                 fail("actionData should be an instance of Map.");
             }
+            verifyNoInteractions(chatClient);
         }
 
         @Test
@@ -146,6 +157,7 @@ class ChatbotServiceTest {
             } else {
                 fail("actionData should be an instance of Map.");
             }
+            verifyNoInteractions(chatClient);
         }
 
         @Test
@@ -155,11 +167,7 @@ class ChatbotServiceTest {
             String userMessage = "유산 기부가 뭐예요?";
             ChatMessageRequestDto requestDto = new ChatMessageRequestDto(userMessage, null);
             String expectedLLMAnswer = "LLM이 생성한 유산 기부 설명입니다.";
-            ChatClient.ChatClientRequestSpec requestSpecMock = mock(ChatClient.ChatClientRequestSpec.class);
-            ChatClient.CallResponseSpec responseSpecMock = mock(ChatClient.CallResponseSpec.class);
-            when(chatClient.prompt(any(Prompt.class))).thenReturn(requestSpecMock);
-            when(requestSpecMock.call()).thenReturn(responseSpecMock);
-            when(responseSpecMock.content()).thenReturn(expectedLLMAnswer);
+            when(chatClient.prompt(any(Prompt.class)).call().content()).thenReturn(expectedLLMAnswer);
 
             // when
             ChatMessageResponseDto response = chatbotService.processMessage(requestDto);
@@ -168,6 +176,115 @@ class ChatbotServiceTest {
             assertEquals("SPEAK", response.actionType());
             assertNull(response.conversationContext());
             assertEquals(expectedLLMAnswer, response.responseText());
+            verify(chatClient, times(1)).prompt(any(Prompt.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("음성 메시지 처리 (processSpeechMessage)")
+    class ProcessSpeechMessage {
+
+        @Mock
+        private MultipartFile mockAudioFile;
+
+        @Test
+        @DisplayName("음성 ATM 요청을 처리하고 STT 텍스트와 TTS 오디오, ATM 맥락을 반환한다.")
+        void givenSpeechAtmRequest_whenProcessSpeechMessage_thenReturnsSpeechResponseWithAtmContext() throws IOException {
+            // given
+            SpeechRequestDto speechRequestDto = new SpeechRequestDto(mockAudioFile, null);
+            String sttResult = "atm 알려줘";
+            byte[] ttsAudio = "네, ATM을 찾아드릴게요.".getBytes();
+            when(speechService.convertSpeechToText(any(MultipartFile.class))).thenReturn(sttResult);
+            when(speechService.convertTextToSpeech(anyString())).thenReturn(ttsAudio);
+
+            // when
+            SpeechResponseDto response = chatbotService.processSpeechMessage(speechRequestDto);
+
+            // then
+            assertNotNull(response);
+            assertEquals(sttResult, response.userMessageText());
+            assertArrayEquals(ttsAudio, response.chatbotAudio());
+            assertEquals("SPEAK", response.actionType());
+            assertEquals("AWAITING_ATM_HIGHLIGHT", response.conversationContext());
+            verify(speechService, times(1)).convertSpeechToText(mockAudioFile);
+            verify(speechService, times(1)).convertTextToSpeech(anyString());
+            verifyNoInteractions(chatClient);
+        }
+
+        @Test
+        @DisplayName("음성 ATM 후속 질문을 처리하고 STT 텍스트와 TTS 오디오, 강조 액션을 반환한다.")
+        void givenSpeechAtmFollowUp_whenProcessSpeechMessage_thenReturnsSpeechResponseWithHighlightAction() throws IOException {
+            // given
+            SpeechRequestDto speechRequestDto = new SpeechRequestDto(mockAudioFile, "AWAITING_ATM_HIGHLIGHT");
+            String sttResult = "네 알려주세요";
+            byte[] ttsAudio = "네, 화면 맨 위쪽에 있는 '주변 ATM 찾기' 버튼을 제가 바로 강조해서 보여드릴게요.".getBytes();
+            when(speechService.convertSpeechToText(any(MultipartFile.class))).thenReturn(sttResult);
+            when(speechService.convertTextToSpeech(anyString())).thenReturn(ttsAudio);
+
+            // when
+            SpeechResponseDto response = chatbotService.processSpeechMessage(speechRequestDto);
+
+            // then
+            assertNotNull(response);
+            assertEquals(sttResult, response.userMessageText());
+            assertArrayEquals(ttsAudio, response.chatbotAudio());
+            assertEquals("HIGHLIGHT_ELEMENT", response.actionType());
+            assertEquals(Map.of("elementId", "#header-atm-button"), response.actionData());
+            assertNull(response.conversationContext());
+            verify(speechService, times(1)).convertSpeechToText(mockAudioFile);
+            verify(speechService, times(1)).convertTextToSpeech(anyString());
+            verifyNoInteractions(chatClient);
+        }
+
+        @Test
+        @DisplayName("음성 보이스피싱 영상 요청 처리하고 STT 텍스트와 TTS 오디오, 영상 액션을 반환한다.")
+        void givenSpeechPhishingVideoRequest_whenProcessSpeechMessage_thenReturnsSpeechResponseWithVideoAction() throws IOException {
+            // given
+            SpeechRequestDto speechRequestDto = new SpeechRequestDto(mockAudioFile, "AWAITING_PHISHING_CHOICE");
+            String sttResult = "영상으로 보여줘";
+            byte[] ttsAudio = "네, 보이스피싱 대처 방법을 영상으로 쉽고 정확하게 알려드릴게요.".getBytes();
+            when(speechService.convertSpeechToText(any(MultipartFile.class))).thenReturn(sttResult);
+            when(speechService.convertTextToSpeech(anyString())).thenReturn(ttsAudio);
+
+            // when
+            SpeechResponseDto response = chatbotService.processSpeechMessage(speechRequestDto);
+
+            // then
+            assertNotNull(response);
+            assertEquals(sttResult, response.userMessageText());
+            assertArrayEquals(ttsAudio, response.chatbotAudio());
+            assertEquals("SHOW_VIDEO", response.actionType());
+            assertEquals(Map.of("videoUrl", phishingGuideVideoUrl), response.actionData());
+            assertNull(response.conversationContext());
+            verify(speechService, times(1)).convertSpeechToText(mockAudioFile);
+            verify(speechService, times(1)).convertTextToSpeech(anyString());
+            verifyNoInteractions(chatClient);
+        }
+
+        @Test
+        @DisplayName("음성 일반 질문을 처리하고 STT 텍스트와 TTS 오디오, LLM 답변을 반환한다.")
+        void givenSpeechGeneralQuestion_whenProcessSpeechMessage_thenReturnsSpeechResponseWithLLMAnswer() throws IOException {
+            // given
+            SpeechRequestDto speechRequestDto = new SpeechRequestDto(mockAudioFile, null);
+            String sttResult = "유산 기부는 어떻게 하나요?";
+            String llmResponseText = "LLM이 생성한 유산 기부 답변입니다.";
+            byte[] ttsAudio = llmResponseText.getBytes();
+            when(speechService.convertSpeechToText(any(MultipartFile.class))).thenReturn(sttResult);
+            when(speechService.convertTextToSpeech(anyString())).thenReturn(ttsAudio);
+            when(chatClient.prompt(any(Prompt.class)).call().content()).thenReturn(llmResponseText);
+
+            // when
+            SpeechResponseDto response = chatbotService.processSpeechMessage(speechRequestDto);
+
+            // then
+            assertNotNull(response);
+            assertEquals(sttResult, response.userMessageText());
+            assertArrayEquals(ttsAudio, response.chatbotAudio());
+            assertEquals("SPEAK", response.actionType());
+            assertNull(response.conversationContext());
+            verify(speechService, times(1)).convertSpeechToText(mockAudioFile);
+            verify(speechService, times(1)).convertTextToSpeech(eq(llmResponseText));
+            verify(chatClient, times(1)).prompt(any(Prompt.class));
         }
     }
 }
