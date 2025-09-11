@@ -1,8 +1,6 @@
 package kb.hackathon.ssh.domain.will.repository;
 
 import kb.hackathon.ssh.domain.will.entity.Will;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
